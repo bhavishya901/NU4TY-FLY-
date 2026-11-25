@@ -37,13 +37,6 @@
   .slider-wrap { padding:4px 0 2px; }
   input[type=range] { width:100%; accent-color:var(--blue); height:7px; }
   .range-labels { display:flex; justify-content:space-between; color:#9aa4b4; font-size:11px; margin-top:5px; }
-  .face-upload { margin-top:22px; padding-top:18px; border-top:1px solid #edf0f5; }
-  .face-upload-title { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px; font-size:14px; font-weight:750; }
-  .face-upload-controls { display:flex; align-items:center; gap:12px; }
-  .face-preview { width:48px; height:48px; flex:0 0 48px; border-radius:50%; object-fit:cover; background:#f1e2d4; border:2px solid #e4eaf3; }
-  .upload-label { flex:1; min-height:43px; display:flex; align-items:center; justify-content:center; border-radius:13px; background:#eef3ff; color:#315eea; font-size:13px; font-weight:750; cursor:pointer; }
-  .upload-label input { display:none; }
-  .remove-face { padding:10px 12px; border-radius:12px; background:#f4f6fa; color:#647086; font-size:12px; font-weight:700; }
   .setting-note { color:#8a95a8; font-size:12px; line-height:1.5; margin-top:18px; }
   #game { padding:0; display:none; background:#f8fbff; }
   #game.active { display:block; }
@@ -94,15 +87,7 @@
       <div class="setting-row" style="margin-bottom:8px"><label for="volumeSlider">Sound volume</label><strong id="volumeValue" style="color:#315eea">70%</strong></div>
       <div class="slider-wrap"><input id="volumeSlider" type="range" min="0" max="100" value="70" /></div>
       <div class="range-labels"><span>0%</span><span>50%</span><span>100%</span></div>
-      <div class="face-upload">
-        <div class="face-upload-title"><span>Character face PNG</span><span id="faceStatus" style="color:#8792a4;font-size:11px;font-weight:600">Optional</span></div>
-        <div class="face-upload-controls">
-          <img id="facePreview" class="face-preview" alt="Face preview" />
-          <label class="upload-label">＋ Upload PNG<input id="faceFile" type="file" accept="image/png,.png" /></label>
-          <button id="removeFace" class="remove-face" type="button">Remove</button>
-        </div>
-      </div>
-      <p class="setting-note">Movement, shooting and hit sounds are played during the game. Your settings and optional face PNG stay saved on this device.</p>
+      <p class="setting-note">Mosquito buzzing loops while the game is active. A hit sound plays when you eliminate the mosquito. Your sound settings stay saved on this device.</p>
     </div>
     <div class="tiny-footer">MOSQUITO SHOOTER</div>
   </section>
@@ -140,45 +125,74 @@
   bestEl.textContent=best;
   let mosquito={x:0,y:0,vx:170,wing:0,scale:1};
   let bullets=[], particles=[], flashes=[];
-  let audioCtx=null;
-  let faceImage=null, faceDataUrl=localStorage.getItem('msFacePng')||'';
+  let audioCtx=null, buzzNodes=null;
+  // Remove data saved by the old optional face-PNG feature.
+  localStorage.removeItem('msFacePng');
   let soundEnabled=localStorage.getItem('msSound')!=='false';
   let volume=Number(localStorage.getItem('msVolume')||70)/100;
   const soundToggle=$('soundToggle'), volumeSlider=$('volumeSlider'), volumeValue=$('volumeValue');
 
   function showScreen(name){ Object.values(screens).forEach(s=>s.classList.remove('active')); screens[name].classList.add('active'); }
   function setSoundUI(){ soundToggle.classList.toggle('on',soundEnabled); soundToggle.setAttribute('aria-checked',String(soundEnabled)); volumeSlider.value=Math.round(volume*100); volumeValue.textContent=Math.round(volume*100)+'%'; volumeSlider.disabled=!soundEnabled; volumeSlider.style.opacity=soundEnabled?'1':'.45'; }
-  function ensureAudio(){ if(!audioCtx){ const AC=window.AudioContext||window.webkitAudioContext; if(AC) audioCtx=new AC(); } if(audioCtx?.state==='suspended') audioCtx.resume(); }
+  function ensureAudio(){
+    if(!audioCtx){ const AC=window.AudioContext||window.webkitAudioContext; if(AC) audioCtx=new AC(); }
+    if(audioCtx?.state==='suspended') audioCtx.resume();
+  }
   function tone(freq,duration,type='sine',gain=.08,slide=0){
     if(!soundEnabled || volume<=0) return;
     ensureAudio(); if(!audioCtx) return;
     const now=audioCtx.currentTime, osc=audioCtx.createOscillator(), amp=audioCtx.createGain();
-    osc.type=type; osc.frequency.setValueAtTime(freq,now); if(slide) osc.frequency.exponentialRampToValueAtTime(Math.max(40,freq+slide),now+duration);
-    amp.gain.setValueAtTime(.0001,now); amp.gain.exponentialRampToValueAtTime(Math.max(.0002,gain*volume),now+.012); amp.gain.exponentialRampToValueAtTime(.0001,now+duration);
+    osc.type=type; osc.frequency.setValueAtTime(freq,now);
+    if(slide) osc.frequency.exponentialRampToValueAtTime(Math.max(40,freq+slide),now+duration);
+    amp.gain.setValueAtTime(.0001,now);
+    amp.gain.exponentialRampToValueAtTime(Math.max(.0002,gain*volume),now+.012);
+    amp.gain.exponentialRampToValueAtTime(.0001,now+duration);
     osc.connect(amp); amp.connect(audioCtx.destination); osc.start(now); osc.stop(now+duration+.02);
   }
-  function directionSound(dir){ if(dir>0){ tone(510,.075,'triangle',.045,130); } else { tone(370,.085,'triangle',.045,-90); } }
-  function shootSound(){ tone(180,.11,'sawtooth',.07, -95); }
-  function missSound(){ tone(120,.07,'sine',.025,-25); }
-  function hitSound(){ tone(760,.10,'sine',.07,260); setTimeout(()=>tone(1120,.16,'sine',.055,180),65); }
-  const faceFile=$('faceFile'), facePreview=$('facePreview'), faceStatus=$('faceStatus');
-  function loadFace(dataUrl){
-    faceDataUrl=dataUrl||'';
-    if(!faceDataUrl){ faceImage=null; facePreview.removeAttribute('src'); faceStatus.textContent='Optional'; return; }
-    const img=new Image(); img.onload=()=>{faceImage=img;}; img.onerror=()=>{faceImage=null;}; img.src=faceDataUrl;
-    facePreview.src=faceDataUrl; faceStatus.textContent='Loaded';
+  // One continuous, synthesized mosquito-buzz loop for active gameplay.
+  function startMosquitoBuzz(){
+    if(!running || paused || !soundEnabled || volume<=0 || buzzNodes) return;
+    ensureAudio(); if(!audioCtx) return;
+    const now=audioCtx.currentTime;
+    const low=audioCtx.createOscillator(), high=audioCtx.createOscillator();
+    const filter=audioCtx.createBiquadFilter(), amp=audioCtx.createGain();
+    const flutter=audioCtx.createOscillator(), flutterDepth=audioCtx.createGain();
+    low.type='sawtooth'; low.frequency.setValueAtTime(420,now);
+    high.type='triangle'; high.frequency.setValueAtTime(840,now);
+    filter.type='lowpass'; filter.frequency.setValueAtTime(2300,now); filter.Q.setValueAtTime(.7,now);
+    amp.gain.setValueAtTime(.0001,now);
+    amp.gain.linearRampToValueAtTime(.022*volume,now+.15);
+    flutter.type='sine'; flutter.frequency.setValueAtTime(29,now);
+    flutterDepth.gain.setValueAtTime(0,now);
+    flutterDepth.gain.linearRampToValueAtTime(.010*volume,now+.15);
+    low.connect(filter); high.connect(filter); filter.connect(amp); amp.connect(audioCtx.destination);
+    flutter.connect(flutterDepth); flutterDepth.connect(amp.gain);
+    low.start(now); high.start(now); flutter.start(now);
+    buzzNodes={low,high,filter,amp,flutter,flutterDepth};
   }
-  faceFile.addEventListener('change',()=>{
-    const file=faceFile.files&&faceFile.files[0]; if(!file) return;
-    if(file.type!=='image/png'){alert('Please select a PNG image.');faceFile.value='';return;}
-    if(file.size>2*1024*1024){alert('Please use a PNG smaller than 2 MB.');faceFile.value='';return;}
-    const reader=new FileReader(); reader.onload=()=>{
-      try{localStorage.setItem('msFacePng',String(reader.result));loadFace(String(reader.result));}
-      catch(e){alert('This PNG is too large to save. Please use a smaller image.');}
-    }; reader.readAsDataURL(file);
-  });
-  $('removeFace').addEventListener('click',()=>{localStorage.removeItem('msFacePng');loadFace('');faceFile.value='';});
-  if(faceDataUrl) loadFace(faceDataUrl);
+  function stopMosquitoBuzz(){
+    if(!buzzNodes || !audioCtx) return;
+    const nodes=buzzNodes, now=audioCtx.currentTime;
+    buzzNodes=null;
+    nodes.amp.gain.cancelScheduledValues(now);
+    nodes.amp.gain.setTargetAtTime(.0001,now,.035);
+    [nodes.low,nodes.high,nodes.flutter].forEach(node=>{ try{node.stop(now+.18);}catch(e){} });
+    setTimeout(()=>{
+      [nodes.low,nodes.high,nodes.filter,nodes.amp,nodes.flutter,nodes.flutterDepth].forEach(node=>{ try{node.disconnect();}catch(e){} });
+    },250);
+  }
+  function updateBuzzVolume(){
+    if(!buzzNodes || !audioCtx) return;
+    const now=audioCtx.currentTime;
+    buzzNodes.amp.gain.cancelScheduledValues(now);
+    buzzNodes.amp.gain.setTargetAtTime(Math.max(.0001,.022*volume),now,.025);
+    buzzNodes.flutterDepth.gain.setTargetAtTime(.010*volume,now,.025);
+  }
+  function hitSound(){
+    // A single two-part hit/kill cue. No miss or shooting sound is used.
+    tone(760,.10,'sine',.07,260);
+    setTimeout(()=>tone(1120,.16,'sine',.055,180),65);
+  }
 
   function resize(){
     const rect=canvas.getBoundingClientRect(); W=rect.width; H=rect.height; dpr=Math.min(window.devicePixelRatio||1,2);
@@ -193,12 +207,13 @@
     aimX=0; aimVx=Math.max(170,W*.68);
     running=true; paused=false; pauseOverlay.classList.remove('show'); exitOverlay.classList.remove('show');
     lastTime=performance.now(); cancelAnimationFrame(raf); raf=requestAnimationFrame(loop);
+    startMosquitoBuzz();
   }
   function startGame(){ ensureAudio(); showScreen('game'); resize(); resetGame(); }
   function saveBest(){ if(score>best){ best=score; localStorage.setItem('mosquitoShooterBest',String(best)); bestEl.textContent=best; } }
-  function goMenu(){ running=false; paused=false; if(respawnTimer){clearTimeout(respawnTimer);respawnTimer=0;} cancelAnimationFrame(raf); saveBest(); pauseOverlay.classList.remove('show'); exitOverlay.classList.remove('show'); showScreen('menu'); }
-  function pauseGame(){ if(!running||paused)return; paused=true; pauseOverlay.classList.add('show'); }
-  function resumeGame(){ if(!running||!paused)return; paused=false; pauseOverlay.classList.remove('show'); lastTime=performance.now(); raf=requestAnimationFrame(loop); }
+  function goMenu(){ running=false; paused=false; stopMosquitoBuzz(); if(respawnTimer){clearTimeout(respawnTimer);respawnTimer=0;} cancelAnimationFrame(raf); saveBest(); pauseOverlay.classList.remove('show'); exitOverlay.classList.remove('show'); showScreen('menu'); }
+  function pauseGame(){ if(!running||paused)return; paused=true; stopMosquitoBuzz(); pauseOverlay.classList.add('show'); }
+  function resumeGame(){ if(!running||!paused)return; paused=false; pauseOverlay.classList.remove('show'); lastTime=performance.now(); raf=requestAnimationFrame(loop); startMosquitoBuzz(); }
 
   function playerPoint(){ return {x:W*.5,y:H*.865}; }
   // Fixed origin at the visible muzzle of the stationary blaster.
@@ -263,17 +278,12 @@
     // Person is lying horizontally on his left side: head at left, body extending right.
     ctx.fillStyle='#efc39a'; roundRect(ctx,-48,-12,99,25,12); ctx.fill();
     ctx.fillStyle='#e9b98f'; roundRect(ctx,25,-8,38,20,9); ctx.fill();
-    // Head base and hair. The uploaded PNG is clipped to the face area.
+    // Default character face (custom PNG upload has been removed).
     const fx=-55, fy=-19, fr=14;
     ctx.fillStyle='#e8b17b'; ctx.beginPath(); ctx.arc(fx,fy,fr,0,Math.PI*2); ctx.fill();
-    if(faceImage && faceImage.complete && faceImage.naturalWidth){
-      ctx.save(); ctx.beginPath(); ctx.arc(fx,fy,fr,0,Math.PI*2); ctx.clip();
-      ctx.drawImage(faceImage,fx-fr,fy-fr,fr*2,fr*2); ctx.restore();
-    } else {
-      ctx.fillStyle='#3a2d2c'; ctx.beginPath(); ctx.arc(fx-1,fy-4,14,Math.PI,Math.PI*2); ctx.fill();
-      ctx.fillStyle='#5a382b'; ctx.beginPath(); ctx.ellipse(fx-7,fy+1,2,1.4,0,0,Math.PI*2); ctx.fill();
-      ctx.beginPath(); ctx.ellipse(fx+1,fy+1,2,1.4,0,0,Math.PI*2); ctx.fill();
-    }
+    ctx.fillStyle='#3a2d2c'; ctx.beginPath(); ctx.arc(fx-1,fy-4,14,Math.PI,Math.PI*2); ctx.fill();
+    ctx.fillStyle='#5a382b'; ctx.beginPath(); ctx.ellipse(fx-7,fy+1,2,1.4,0,0,Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(fx+1,fy+1,2,1.4,0,0,Math.PI*2); ctx.fill();
     // Resting arm beside the torso.
     ctx.strokeStyle='#e8b17b'; ctx.lineWidth=10; ctx.lineCap='round'; ctx.beginPath(); ctx.moveTo(-5,1); ctx.lineTo(21,7); ctx.stroke();
     // Stationary blaster; the aiming ray pivots from the muzzle, not the gun body.
@@ -319,7 +329,6 @@
       distance:0, maxDistance:ray.length, speed:3000,
       hit:false, done:false
     });
-    shootSound();
   }
   function update(dt,t){
     aimX+=aimVx*dt;
@@ -329,7 +338,6 @@
       const offscreenMargin=46;
       if(mosquito.vx>0 && mosquito.x>W+offscreenMargin){mosquito.x=W+offscreenMargin;mosquito.vx=-Math.abs(mosquito.vx);reversed=true;}
       else if(mosquito.vx<0 && mosquito.x<-offscreenMargin){mosquito.x=-offscreenMargin;mosquito.vx=Math.abs(mosquito.vx);reversed=true;}
-      if(reversed && Math.sign(mosquito.vx)!==oldDir) directionSound(Math.sign(mosquito.vx));
       mosquito.y=H*.37+Math.sin(t*.0018)*Math.min(15,H*.018);
     }
     for(let i=bullets.length-1;i>=0;i--){
@@ -370,8 +378,17 @@
   $('playBtn').addEventListener('click',startGame);
   $('settingsBtn').addEventListener('click',()=>{setSoundUI();showScreen('settings');});
   $('settingsBack').addEventListener('click',()=>showScreen('menu'));
-  soundToggle.addEventListener('click',()=>{soundEnabled=!soundEnabled;localStorage.setItem('msSound',String(soundEnabled));setSoundUI();if(soundEnabled){ensureAudio();tone(620,.09,'sine',.04,120);}});
-  volumeSlider.addEventListener('input',()=>{volume=Number(volumeSlider.value)/100;localStorage.setItem('msVolume',String(Math.round(volume*100)));volumeValue.textContent=Math.round(volume*100)+'%';});
+  soundToggle.addEventListener('click',()=>{
+    soundEnabled=!soundEnabled; localStorage.setItem('msSound',String(soundEnabled)); setSoundUI();
+    if(soundEnabled){ if(running&&!paused) startMosquitoBuzz(); } else { stopMosquitoBuzz(); }
+  });
+  volumeSlider.addEventListener('input',()=>{
+    volume=Number(volumeSlider.value)/100;
+    localStorage.setItem('msVolume',String(Math.round(volume*100)));
+    volumeValue.textContent=Math.round(volume*100)+'%';
+    if(volume>0 && running && !paused && soundEnabled && !buzzNodes) startMosquitoBuzz();
+    updateBuzzVolume();
+  });
   $('pauseBtn').addEventListener('click',pauseGame);
   $('resumeBtn').addEventListener('click',resumeGame);
   $('exitBtn').addEventListener('click',()=>{if(running&&!paused)pauseGame();exitOverlay.classList.add('show');});
